@@ -28,6 +28,7 @@ use enumflags2::BitFlags;
 use futures_util::io::{AsyncRead, AsyncWrite};
 use futures_util::stream::TryStreamExt;
 use std::{borrow::Cow, fmt::Debug};
+use tracing::info;
 
 /// `Client` is the main entry point to the SQL Server, providing query
 /// execution capabilities.
@@ -331,10 +332,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
             .into_iter()
             .filter(|column| column.base.flags.contains(ColumnFlag::Updateable))
             .collect();
+        let col_specs_indexed = columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| format!("#{i}: {}", c))  // uses Display -> "[Name] <type>"
+            .join(", ");
 
         self.connection.flush_stream().await?;
         let col_data = columns.iter().map(|c| format!("{}", c)).join(", ");
         let query = format!("INSERT BULK {} ({})", table, col_data);
+        info!("INSERT BULK header: {}", query);
+        info!("INSERT BULK specs:  {}", col_specs_indexed);
 
         let req = BatchRequest::new(query, self.connection.context().transaction_descriptor());
         let id = self.connection.context_mut().next_packet_id();
