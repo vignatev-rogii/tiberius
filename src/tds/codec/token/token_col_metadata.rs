@@ -25,7 +25,8 @@ pub struct MetaDataColumn<'a> {
 
 impl<'a> Display for MetaDataColumn<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] ", self.col_name)?;
+        let name = self.col_name.replace(']', "]]");
+        write!(f, "[{}] ", name)?; 
 
         match &self.base.ty {
             TypeInfo::FixedLen(fixed) => match fixed {
