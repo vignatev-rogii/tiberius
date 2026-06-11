@@ -13,13 +13,22 @@ use std::{
 use tokio_rustls::{
     rustls::{
         client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        crypto::ring,
         pki_types::{CertificateDer, ServerName, UnixTime},
         ClientConfig, ConfigBuilder, DigitallySignedStruct, Error as RustlsError, RootCertStore,
         SignatureScheme, WantsVerifier,
     },
     TlsConnector,
 };
+// Crypto provider is selected at compile time by the `ring` / `aws_lc_rs` feature.
+// If both are enabled, `aws_lc_rs` wins.
+#[cfg(feature = "aws_lc_rs")]
+use tokio_rustls::rustls::crypto::aws_lc_rs as tls_provider;
+#[cfg(all(feature = "ring", not(feature = "aws_lc_rs")))]
+use tokio_rustls::rustls::crypto::ring as tls_provider;
+#[cfg(not(any(feature = "ring", feature = "aws_lc_rs")))]
+compile_error!(
+    "tiberius `rustls` backend requires a crypto provider: enable feature `ring` or `aws_lc_rs`"
+);
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{event, Level};
 
@@ -67,7 +76,7 @@ impl ServerCertVerifier for NoCertVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        ring::default_provider()
+        tls_provider::default_provider()
             .signature_verification_algorithms
             .supported_schemes()
     }
@@ -87,11 +96,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
     pub(super) async fn new(config: &Config, stream: S) -> crate::Result<Self> {
         event!(Level::INFO, "Performing a TLS handshake");
 
-        // rustls 0.23: pin the crypto backend to `ring` explicitly so this crate
-        // never relies on a process-wide default provider (the rest of the
-        // workspace is ring-only; mixing in aws-lc-rs would pull a second backend).
-        let builder = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
-            .with_safe_default_protocol_versions()?;
+        // rustls 0.23: pin the crypto backend to the feature-selected provider
+        // (`ring` or `aws_lc_rs`) explicitly, so this crate never relies on a
+        // process-wide default provider and the consumer controls which backend
+        // is linked (avoids pulling a second one).
+        let builder =
+            ClientConfig::builder_with_provider(Arc::new(tls_provider::default_provider()))
+                .with_safe_default_protocol_versions()?;
 
         let client_config = match &config.trust {
             TrustConfig::CaCertificateLocation(path) => {
